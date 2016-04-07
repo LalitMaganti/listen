@@ -23,7 +23,7 @@ public class ListenProcessor extends AbstractProcessor {
 
     @Override
     public synchronized void init(ProcessingEnvironment env) {
-        super.init(processingEnv);
+        super.init(env);
 
         mFiler = processingEnv.getFiler();
         mMessager = processingEnv.getMessager();
@@ -52,8 +52,9 @@ public class ListenProcessor extends AbstractProcessor {
             }
 
             ClassName className = ClassName.get(annotated);
+            TypeName annotatedType = TypeName.get(annotated.asType());
             TypeSpec.Builder classSpec = TypeSpec.classBuilder(className.simpleName() + "Dispatcher")
-                    .addSuperinterface(TypeName.get(annotated.asType()));
+                    .addSuperinterface(annotatedType);
             for (ExecutableElement method : methods) {
                 StringBuilder builder = new StringBuilder();
                 List<? extends VariableElement> parameters = method.getParameters();
@@ -66,15 +67,37 @@ public class ListenProcessor extends AbstractProcessor {
                 }
 
                 CodeBlock code = CodeBlock.builder()
-                        .beginControlFlow("for ($T $s : $s)", className, "listener", "mListeners")
-                        .addStatement("$s.$s($s)", "listener", method.getSimpleName(), builder.toString())
+                        .beginControlFlow("for ($T $L = 0; $L < $L.size(); $s++)", TypeName.INT, "i", "i", "mListeners", "i")
+                        .addStatement("$L.get($L).$s($L)", "mListeners", "i", method.getSimpleName(), builder.toString())
                         .endControlFlow()
                         .build();
 
-                classSpec.addMethod(MethodSpec.overriding(method)
+                MethodSpec overridden = MethodSpec.overriding(method)
                         .addCode(code)
-                        .build());
+                        .build();
+                classSpec.addMethod(overridden);
             }
+
+            MethodSpec add = MethodSpec.methodBuilder("addListener")
+                    .addParameter(annotatedType, "listener", Modifier.PUBLIC, Modifier.FINAL)
+                    .addStatement("$L.add($L)", "mListeners", "listener")
+                    .returns(TypeName.VOID)
+                    .build();
+            classSpec.addMethod(add);
+
+            MethodSpec remove = MethodSpec.methodBuilder("removeListener")
+                    .addParameter(annotatedType, "listener", Modifier.PUBLIC, Modifier.FINAL)
+                    .addStatement("$L.remove($L)", "mListeners", "listener")
+                    .returns(TypeName.VOID)
+                    .build();
+            classSpec.addMethod(remove);
+
+            FieldSpec listeners = FieldSpec
+                    .builder(ParameterizedTypeName.get(
+                            ClassName.get(List.class), annotatedType), "mListeners", Modifier.PRIVATE, Modifier.FINAL)
+                    .initializer("new $T<>()", ArrayList.class)
+                    .build();
+            classSpec.addField(listeners);
 
             try {
                 JavaFile javaFile = JavaFile.builder(className.packageName(), classSpec.build()).build();

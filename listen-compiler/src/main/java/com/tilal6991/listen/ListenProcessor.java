@@ -67,7 +67,7 @@ public class ListenProcessor extends AbstractProcessor {
                 }
 
                 CodeBlock code = CodeBlock.builder()
-                        .beginControlFlow("for ($T $L = 0; $L < $L.size(); $s++)", TypeName.INT, "i", "i", "mListeners", "i")
+                        .beginControlFlow("for ($T $L = 0; $L < $L.size(); $L++)", TypeName.INT, "i", "i", "mListeners", "i")
                         .addStatement("$L.get($L).$s($L)", "mListeners", "i", method.getSimpleName(), builder.toString())
                         .endControlFlow()
                         .build();

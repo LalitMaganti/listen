@@ -9,3 +9,4 @@ dependencies {
 
     compile project(':listen')
 }
+apply from: rootProject.file('gradle/gradle-mvn-push.gradle')

@@ -79,14 +79,16 @@ public class ListenProcessor extends AbstractProcessor {
             }
 
             MethodSpec add = MethodSpec.methodBuilder("addListener")
-                    .addParameter(annotatedType, "listener", Modifier.PUBLIC, Modifier.FINAL)
+                    .addModifiers(Modifier.PUBLIC, Modifier.FINAL)
+                    .addParameter(annotatedType, "listener")
                     .addStatement("$L.add($L)", "mListeners", "listener")
                     .returns(TypeName.VOID)
                     .build();
             classSpec.addMethod(add);
 
             MethodSpec remove = MethodSpec.methodBuilder("removeListener")
-                    .addParameter(annotatedType, "listener", Modifier.PUBLIC, Modifier.FINAL)
+                    .addModifiers(Modifier.PUBLIC, Modifier.FINAL)
+                    .addParameter(annotatedType, "listener")
                     .addStatement("$L.remove($L)", "mListeners", "listener")
                     .returns(TypeName.VOID)
                     .build();

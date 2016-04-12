@@ -105,7 +105,7 @@ public class ListenProcessor extends AbstractProcessor {
 
         TypeSpec.Builder events = TypeSpec.classBuilder(eventsName)
                 .addModifiers(Modifier.PUBLIC, Modifier.FINAL);
-        events.addMethod(MethodSpec.constructorBuilder().addModifiers(Modifier.PRIVATE).build())
+        events.addMethod(MethodSpec.constructorBuilder().addModifiers(Modifier.PRIVATE).build());
 
         TypeSpec.Builder classSpec = TypeSpec.classBuilder(mainAnnotation.className())
                 .addSuperinterface(annotatedType);

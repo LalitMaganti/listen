@@ -103,31 +103,25 @@ public class ListenProcessor extends AbstractProcessor {
         TypeName annotatedType = TypeName.get(annotated.asType());
         String eventsName = mainAnnotation.eventsClassName();
 
-        TypeSpec.Builder events = TypeSpec.classBuilder(eventsName)
+        TypeSpec.Builder eventsClass = TypeSpec.classBuilder(eventsName)
                 .addModifiers(Modifier.PUBLIC, Modifier.FINAL);
-        events.addMethod(MethodSpec.constructorBuilder().addModifiers(Modifier.PRIVATE).build());
 
         TypeSpec.Builder classSpec = TypeSpec.classBuilder(mainAnnotation.className())
+                .addModifiers(Modifier.PUBLIC, Modifier.ABSTRACT)
                 .addSuperinterface(annotatedType);
-        TypeSpec.Builder eventInterface = TypeSpec.interfaceBuilder(
-                mainAnnotation.eventInterfaceClassName());
 
         for (ExecutableElement method : methods) {
             String oldName = method.getSimpleName().toString();
             String name = Character.toUpperCase(oldName.charAt(0)) + oldName.substring(1);
 
             TypeSpec.Builder event = TypeSpec.classBuilder(name)
-                    .addModifiers(Modifier.STATIC, Modifier.PUBLIC);
+                    .addModifiers(Modifier.STATIC, Modifier.PUBLIC)
+                    .addSuperinterface(ClassName.get(className.packageName(), eventsName, "Event"));
             MethodSpec.Builder constructor = MethodSpec.constructorBuilder();
             CodeBlock.Builder constructorBlock = CodeBlock.builder();
             for (VariableElement parameter : method.getParameters()) {
-                String param;
                 ParamName annotation = parameter.getAnnotation(ParamName.class);
-                if (annotation == null) {
-                    param = parameter.getSimpleName().toString();
-                } else {
-                    param = annotation.value();
-                }
+                String param = annotation == null ? parameter.getSimpleName().toString() : annotation.value();
 
                 TypeName type = TypeName.get(parameter.asType());
                 event.addField(type, param, Modifier.FINAL, Modifier.PUBLIC);
@@ -138,34 +132,33 @@ public class ListenProcessor extends AbstractProcessor {
 
             constructor.addCode(constructorBlock.build());
             event.addMethod(constructor.build());
-            events.addType(event.build());
+            eventsClass.addType(event.build());
 
-            String parameterList = getParameterList(method);
-            CodeBlock code = CodeBlock.builder()
-                    .beginControlFlow("for ($T $L = 0; $L < $L.size(); $L++)", TypeName.INT, "i", "i", "mListeners", "i")
-                    .addStatement("$L.get($L).$L(new $N.$N($L))", "mListeners", "i", method.getSimpleName(), eventsName, name, parameterList)
-                    .endControlFlow()
-                    .build();
-
-            eventInterface.addMethod(MethodSpec.methodBuilder(oldName)
-                    .addParameter(ClassName.get(className.packageName(), eventsName, name), oldName)
-                    .addModifiers(Modifier.PUBLIC, Modifier.ABSTRACT)
+            // Add the event specific method.
+            classSpec.addMethod(MethodSpec.overriding(method)
+                    .addCode(CodeBlock.builder()
+                            .addStatement("$L(new $N.$N($L))", "onEvent",
+                                    eventsName, name, getParameterList(method))
+                            .build())
                     .build());
-
-            MethodSpec overridden = MethodSpec.overriding(method)
-                    .addCode(code)
-                    .build();
-            classSpec.addMethod(overridden);
         }
 
-        generateListenersField(ClassName.get(className.packageName(),
-                mainAnnotation.eventInterfaceClassName()), classSpec);
+        // Private constructor for event class.
+        eventsClass.addMethod(MethodSpec.constructorBuilder().addModifiers(Modifier.PRIVATE).build());
 
+        // Root event class.
+        eventsClass.addType(TypeSpec.interfaceBuilder("Event")
+                .addModifiers(Modifier.STATIC, Modifier.PUBLIC)
+                .build());
+
+        // Root event method.
+        classSpec.addMethod(MethodSpec.methodBuilder("onEvent")
+                .addParameter(ClassName.get(className.packageName(), eventsName, "Event"), "event")
+                .addModifiers(Modifier.PUBLIC, Modifier.ABSTRACT).build());
+
+        // Write out both classes to disk.
         try {
-            JavaFile javaFile = JavaFile.builder(className.packageName(), events.build()).build();
-            javaFile.writeTo(mFiler);
-
-            javaFile = JavaFile.builder(className.packageName(), eventInterface.build()).build();
+            JavaFile javaFile = JavaFile.builder(className.packageName(), eventsClass.build()).build();
             javaFile.writeTo(mFiler);
 
             javaFile = JavaFile.builder(className.packageName(), classSpec.build()).build();

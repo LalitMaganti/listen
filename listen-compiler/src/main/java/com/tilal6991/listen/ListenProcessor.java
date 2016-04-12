@@ -103,7 +103,10 @@ public class ListenProcessor extends AbstractProcessor {
         TypeName annotatedType = TypeName.get(annotated.asType());
         String eventsName = mainAnnotation.eventsClassName();
 
-        TypeSpec.Builder events = TypeSpec.classBuilder(eventsName);
+        TypeSpec.Builder events = TypeSpec.classBuilder(eventsName)
+                .addModifiers(Modifier.PUBLIC, Modifier.FINAL);
+        events.addMethod(MethodSpec.constructorBuilder().addModifiers(Modifier.PRIVATE).build())
+
         TypeSpec.Builder classSpec = TypeSpec.classBuilder(mainAnnotation.className())
                 .addSuperinterface(annotatedType);
         TypeSpec.Builder eventInterface = TypeSpec.interfaceBuilder(

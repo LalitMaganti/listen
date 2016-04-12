@@ -1,21 +1,40 @@
 package com.tilal6991.listen;
 
 import com.google.auto.service.AutoService;
-import com.squareup.javapoet.*;
+import com.google.common.collect.ImmutableSet;
+import com.squareup.javapoet.ClassName;
+import com.squareup.javapoet.CodeBlock;
+import com.squareup.javapoet.FieldSpec;
+import com.squareup.javapoet.JavaFile;
+import com.squareup.javapoet.MethodSpec;
+import com.squareup.javapoet.ParameterSpec;
+import com.squareup.javapoet.ParameterizedTypeName;
+import com.squareup.javapoet.TypeName;
+import com.squareup.javapoet.TypeSpec;
 
-import javax.annotation.processing.*;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+
+import javax.annotation.processing.AbstractProcessor;
+import javax.annotation.processing.Filer;
+import javax.annotation.processing.Messager;
+import javax.annotation.processing.ProcessingEnvironment;
+import javax.annotation.processing.Processor;
+import javax.annotation.processing.RoundEnvironment;
 import javax.lang.model.SourceVersion;
-import javax.lang.model.element.*;
+import javax.lang.model.element.Element;
+import javax.lang.model.element.ElementKind;
+import javax.lang.model.element.ExecutableElement;
+import javax.lang.model.element.Modifier;
+import javax.lang.model.element.TypeElement;
+import javax.lang.model.element.VariableElement;
 import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
 import javax.lang.model.util.Types;
 import javax.tools.Diagnostic;
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
 
 @AutoService(Processor.class)
 public class ListenProcessor extends AbstractProcessor {
@@ -50,65 +69,166 @@ public class ListenProcessor extends AbstractProcessor {
                 return true;
             }
 
-            ClassName className = ClassName.get(annotated);
-            TypeName annotatedType = TypeName.get(annotated.asType());
-            TypeSpec.Builder classSpec = TypeSpec.classBuilder(className.simpleName() + "Dispatcher")
-                    .addSuperinterface(annotatedType);
-            for (ExecutableElement method : methods) {
-                StringBuilder builder = new StringBuilder();
-                List<? extends VariableElement> parameters = method.getParameters();
-                for (VariableElement parameter : parameters) {
-                    String name = parameter.getSimpleName().toString();
-                    if (builder.length() != 0) {
-                        builder.append(", ");
-                    }
-                    builder.append(name);
-                }
+            boolean success = generateListenerDispatcher(annotated, methods);
+            if (!success) {
+                return true;
+            }
+        }
 
-                CodeBlock code = CodeBlock.builder()
-                        .beginControlFlow("for ($T $L = 0; $L < $L.size(); $L++)", TypeName.INT, "i", "i", "mListeners", "i")
-                        .addStatement("$L.get($L).$L($L)", "mListeners", "i", method.getSimpleName(), builder.toString())
-                        .endControlFlow()
-                        .build();
-
-                MethodSpec overridden = MethodSpec.overriding(method)
-                        .addCode(code)
-                        .build();
-                classSpec.addMethod(overridden);
+        for (Element annotatedElement : env.getElementsAnnotatedWith(EventObjectListener.class)) {
+            if (annotatedElement.getKind() != ElementKind.INTERFACE) {
+                mMessager.printMessage(Diagnostic.Kind.ERROR, "Fail");
+                return true;
             }
 
-            MethodSpec add = MethodSpec.methodBuilder("addListener")
-                    .addModifiers(Modifier.PUBLIC, Modifier.FINAL)
-                    .addParameter(annotatedType, "listener")
-                    .addStatement("$L.add($L)", "mListeners", "listener")
-                    .returns(TypeName.VOID)
-                    .build();
-            classSpec.addMethod(add);
+            TypeElement annotated = (TypeElement) annotatedElement;
 
-            MethodSpec remove = MethodSpec.methodBuilder("removeListener")
-                    .addModifiers(Modifier.PUBLIC, Modifier.FINAL)
-                    .addParameter(annotatedType, "listener")
-                    .addStatement("$L.remove($L)", "mListeners", "listener")
-                    .returns(TypeName.VOID)
-                    .build();
-            classSpec.addMethod(remove);
+            Set<ExecutableElement> methods = new HashSet<ExecutableElement>();
+            if (!getAllMethodsEverywhere(annotated, methods)) {
+                return true;
+            }
 
-            FieldSpec listeners = FieldSpec
-                    .builder(ParameterizedTypeName.get(
-                            ClassName.get(List.class), annotatedType), "mListeners", Modifier.PRIVATE, Modifier.FINAL)
-                    .initializer("new $T<>()", ArrayList.class)
-                    .build();
-            classSpec.addField(listeners);
-
-            try {
-                JavaFile javaFile = JavaFile.builder(className.packageName(), classSpec.build()).build();
-                javaFile.writeTo(mFiler);
-            } catch (IOException e) {
-                mMessager.printMessage(Diagnostic.Kind.ERROR, "Fail");
+            boolean success = generateListenerEventDispatcher(annotated, methods);
+            if (!success) {
                 return true;
             }
         }
         return true;
+    }
+
+    private boolean generateListenerEventDispatcher(TypeElement annotated, Set<ExecutableElement> methods) {
+        EventObjectListener mainAnnotation = annotated.getAnnotation(EventObjectListener.class);
+
+        ClassName className = ClassName.get(annotated);
+        TypeName annotatedType = TypeName.get(annotated.asType());
+        String eventsName = mainAnnotation.eventsClassName();
+
+        TypeSpec.Builder events = TypeSpec.classBuilder(eventsName);
+        TypeSpec.Builder classSpec = TypeSpec.classBuilder(mainAnnotation.className())
+                .addSuperinterface(annotatedType);
+        TypeSpec.Builder eventInterface = TypeSpec.interfaceBuilder(
+                mainAnnotation.eventInterfaceClassName());
+
+        for (ExecutableElement method : methods) {
+            String oldName = method.getSimpleName().toString();
+            String name = Character.toUpperCase(oldName.charAt(0)) + oldName.substring(1);
+
+            TypeSpec.Builder event = TypeSpec.classBuilder(name)
+                    .addModifiers(Modifier.STATIC, Modifier.PUBLIC);
+            MethodSpec.Builder constructor = MethodSpec.constructorBuilder();
+            CodeBlock.Builder constructorBlock = CodeBlock.builder();
+            for (VariableElement parameter : method.getParameters()) {
+                String param;
+                ParamName annotation = parameter.getAnnotation(ParamName.class);
+                if (annotation == null) {
+                    param = parameter.getSimpleName().toString();
+                } else {
+                    param = annotation.value();
+                }
+
+                TypeName type = TypeName.get(parameter.asType());
+                event.addField(type, param, Modifier.FINAL, Modifier.PUBLIC);
+
+                constructor.addParameter(ParameterSpec.builder(type, param).build());
+                constructorBlock.addStatement("this.$L = $L", param, param);
+            }
+
+            constructor.addCode(constructorBlock.build());
+            event.addMethod(constructor.build());
+            events.addType(event.build());
+
+            String parameterList = getParameterList(method);
+            CodeBlock code = CodeBlock.builder()
+                    .beginControlFlow("for ($T $L = 0; $L < $L.size(); $L++)", TypeName.INT, "i", "i", "mListeners", "i")
+                    .addStatement("$L.get($L).$L(new $N.$N($L))", "mListeners", "i", method.getSimpleName(), eventsName, name, parameterList)
+                    .endControlFlow()
+                    .build();
+
+            eventInterface.addMethod(MethodSpec.methodBuilder(oldName)
+                    .addParameter(ClassName.get(className.packageName(), eventsName, name), oldName)
+                    .addModifiers(Modifier.PUBLIC, Modifier.ABSTRACT)
+                    .build());
+
+            MethodSpec overridden = MethodSpec.overriding(method)
+                    .addCode(code)
+                    .build();
+            classSpec.addMethod(overridden);
+        }
+
+        generateListenersField(ClassName.get(className.packageName(),
+                mainAnnotation.eventInterfaceClassName()), classSpec);
+
+        try {
+            JavaFile javaFile = JavaFile.builder(className.packageName(), events.build()).build();
+            javaFile.writeTo(mFiler);
+
+            javaFile = JavaFile.builder(className.packageName(), eventInterface.build()).build();
+            javaFile.writeTo(mFiler);
+
+            javaFile = JavaFile.builder(className.packageName(), classSpec.build()).build();
+            javaFile.writeTo(mFiler);
+        } catch (IOException e) {
+            mMessager.printMessage(Diagnostic.Kind.ERROR, "Fail");
+            return false;
+        }
+        return true;
+    }
+
+    private boolean generateListenerDispatcher(TypeElement annotated, Set<ExecutableElement> methods) {
+        ClassName className = ClassName.get(annotated);
+        TypeName annotatedType = TypeName.get(annotated.asType());
+        TypeSpec.Builder classSpec = TypeSpec.classBuilder(className.simpleName() + "Dispatcher")
+                .addSuperinterface(annotatedType);
+        for (ExecutableElement method : methods) {
+            String parameterList = getParameterList(method);
+
+            CodeBlock code = CodeBlock.builder()
+                    .beginControlFlow("for ($T $L = 0; $L < $L.size(); $L++)", TypeName.INT, "i", "i", "mListeners", "i")
+                    .addStatement("$L.get($L).$L($L)", "mListeners", "i", method.getSimpleName(), parameterList)
+                    .endControlFlow()
+                    .build();
+
+            MethodSpec overridden = MethodSpec.overriding(method)
+                    .addCode(code)
+                    .build();
+            classSpec.addMethod(overridden);
+        }
+
+        generateListenersField(annotatedType, classSpec);
+
+        try {
+            JavaFile javaFile = JavaFile.builder(className.packageName(), classSpec.build()).build();
+            javaFile.writeTo(mFiler);
+        } catch (IOException e) {
+            mMessager.printMessage(Diagnostic.Kind.ERROR, "Fail");
+            return false;
+        }
+        return true;
+    }
+
+    private void generateListenersField(TypeName annotatedType, TypeSpec.Builder classSpec) {
+        MethodSpec add = MethodSpec.methodBuilder("addListener")
+                .addModifiers(Modifier.PUBLIC, Modifier.FINAL)
+                .addParameter(annotatedType, "listener")
+                .addStatement("$L.add($L)", "mListeners", "listener")
+                .returns(TypeName.VOID)
+                .build();
+        classSpec.addMethod(add);
+
+        MethodSpec remove = MethodSpec.methodBuilder("removeListener")
+                .addModifiers(Modifier.PUBLIC, Modifier.FINAL)
+                .addParameter(annotatedType, "listener")
+                .addStatement("$L.remove($L)", "mListeners", "listener")
+                .returns(TypeName.VOID)
+                .build();
+        classSpec.addMethod(remove);
+
+        FieldSpec listeners = FieldSpec
+                .builder(ParameterizedTypeName.get(
+                        ClassName.get(List.class), annotatedType), "mListeners", Modifier.PRIVATE, Modifier.FINAL)
+                .initializer("new $T<>()", ArrayList.class)
+                .build();
+        classSpec.addField(listeners);
     }
 
     private boolean getAllMethodsEverywhere(TypeElement annotated, Set<ExecutableElement> methods) {
@@ -135,11 +255,25 @@ public class ListenProcessor extends AbstractProcessor {
 
     @Override
     public Set<String> getSupportedAnnotationTypes() {
-        return Collections.singleton(Listener.class.getCanonicalName());
+        return ImmutableSet.of(Listener.class.getCanonicalName(),
+                EventObjectListener.class.getCanonicalName());
     }
 
     @Override
     public SourceVersion getSupportedSourceVersion() {
         return SourceVersion.latestSupported();
+    }
+
+    public String getParameterList(ExecutableElement method) {
+        StringBuilder builder = new StringBuilder();
+        List<? extends VariableElement> parameters = method.getParameters();
+        for (VariableElement parameter : parameters) {
+            String name = parameter.getSimpleName().toString();
+            if (builder.length() != 0) {
+                builder.append(", ");
+            }
+            builder.append(name);
+        }
+        return builder.toString();
     }
 }

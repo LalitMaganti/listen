@@ -7,10 +7,13 @@ import javax.annotation.processing.*;
 import javax.lang.model.SourceVersion;
 import javax.lang.model.element.*;
 import javax.lang.model.type.TypeKind;
+import javax.lang.model.type.TypeMirror;
+import javax.lang.model.util.Types;
 import javax.tools.Diagnostic;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -21,12 +24,15 @@ public class ListenProcessor extends AbstractProcessor {
 
     private Messager mMessager;
 
+    private Types mTypes;
+
     @Override
     public synchronized void init(ProcessingEnvironment env) {
         super.init(env);
 
         mFiler = processingEnv.getFiler();
         mMessager = processingEnv.getMessager();
+        mTypes = processingEnv.getTypeUtils();
     }
 
     @Override
@@ -37,18 +43,11 @@ public class ListenProcessor extends AbstractProcessor {
                 return true;
             }
 
-            List<ExecutableElement> methods = new ArrayList<>();
             TypeElement annotated = (TypeElement) annotatedElement;
-            for (Element enclosed : annotated.getEnclosedElements()) {
-                if (enclosed.getKind() == ElementKind.METHOD) {
-                    ExecutableElement method = (ExecutableElement) enclosed;
-                    if (method.getReturnType().getKind() != TypeKind.VOID) {
-                        mMessager.printMessage(Diagnostic.Kind.ERROR, "Fail");
-                        return true;
-                    }
 
-                    methods.add(method);
-                }
+            Set<ExecutableElement> methods = new HashSet<ExecutableElement>();
+            if (!getAllMethodsEverywhere(annotated, methods)) {
+                return true;
             }
 
             ClassName className = ClassName.get(annotated);
@@ -107,6 +106,28 @@ public class ListenProcessor extends AbstractProcessor {
             } catch (IOException e) {
                 mMessager.printMessage(Diagnostic.Kind.ERROR, "Fail");
                 return true;
+            }
+        }
+        return true;
+    }
+
+    private boolean getAllMethodsEverywhere(TypeElement annotated, Set<ExecutableElement> methods) {
+        for (Element enclosed : annotated.getEnclosedElements()) {
+            if (enclosed.getKind() == ElementKind.METHOD) {
+                ExecutableElement method = (ExecutableElement) enclosed;
+                if (method.getReturnType().getKind() != TypeKind.VOID) {
+                    mMessager.printMessage(Diagnostic.Kind.ERROR, "Fail");
+                    return false;
+                }
+
+                methods.add(method);
+            }
+        }
+
+        for (TypeMirror mirror : annotated.getInterfaces()) {
+            TypeElement element = (TypeElement) mTypes.asElement(mirror);
+            if (!getAllMethodsEverywhere(element, methods)) {
+                return false;
             }
         }
         return true;
